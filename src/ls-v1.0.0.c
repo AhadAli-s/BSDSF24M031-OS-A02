@@ -17,12 +17,14 @@
 #include <pwd.h>
 #include <grp.h>
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 
 extern int errno;
 
 void do_ls(const char *dir, int long_flag);
 void do_ls_long(const char *dir, DIR *dp);
+void do_ls_columns(DIR *dp);
 void mode_to_string(mode_t mode, char *str);
 int num_width(unsigned long long n);
 
@@ -62,7 +64,6 @@ int main(int argc, char *argv[])
 
 void do_ls(const char *dir, int long_flag)
 {
-    struct dirent *entry;
     DIR *dp = opendir(dir);
     if (dp == NULL)
     {
@@ -76,17 +77,7 @@ void do_ls(const char *dir, int long_flag)
     }
     else
     {
-        errno = 0;
-        while ((entry = readdir(dp)) != NULL)
-        {
-            if (entry->d_name[0] == '.')
-                continue;
-            printf("%s\n", entry->d_name);
-        }
-        if (errno != 0)
-        {
-            perror("readdir failed");
-        }
+        do_ls_columns(dp);
     }
 
     closedir(dp);
@@ -256,4 +247,79 @@ void do_ls_long(const char *dir, DIR *dp)
         }
         printf("\n");
     }
+}
+
+/* Default display: "down then across" columns that fit the terminal width */
+void do_ls_columns(DIR *dp)
+{
+    struct dirent *entry;
+    char **names = NULL;
+    size_t count = 0, capacity = 0, maxlen = 0;
+
+    /* Read all filenames into a dynamic array and track the longest */
+    errno = 0;
+    while ((entry = readdir(dp)) != NULL)
+    {
+        if (entry->d_name[0] == '.')
+            continue;
+
+        if (count == capacity)
+        {
+            capacity = capacity ? capacity * 2 : 64;
+            char **tmp = realloc(names, capacity * sizeof(char *));
+            if (tmp == NULL)
+            {
+                perror("realloc");
+                break;
+            }
+            names = tmp;
+        }
+
+        names[count] = strdup(entry->d_name);
+        if (names[count] == NULL)
+        {
+            perror("strdup");
+            break;
+        }
+        if (strlen(names[count]) > maxlen)
+            maxlen = strlen(names[count]);
+        count++;
+    }
+    if (errno != 0)
+        perror("readdir failed");
+
+    if (count > 0)
+    {
+        /* Terminal width from ioctl, fall back to 80 columns */
+        struct winsize ws;
+        size_t term_width = 80;
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+            term_width = ws.ws_col;
+
+        size_t col_width = maxlen + 2;
+        size_t cols = term_width / col_width;
+        if (cols < 1)
+            cols = 1;
+        size_t rows = (count + cols - 1) / cols;
+
+        /* Print row by row, item index = row + col * rows */
+        for (size_t r = 0; r < rows; r++)
+        {
+            for (size_t c = 0; c < cols; c++)
+            {
+                size_t idx = r + c * rows;
+                if (idx >= count)
+                    break;
+                if (idx + rows < count && c + 1 < cols)
+                    printf("%-*s", (int)col_width, names[idx]);
+                else
+                    printf("%s", names[idx]);
+            }
+            printf("\n");
+        }
+    }
+
+    for (size_t i = 0; i < count; i++)
+        free(names[i]);
+    free(names);
 }
