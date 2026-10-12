@@ -22,47 +22,55 @@
 
 extern int errno;
 
-void do_ls(const char *dir, int long_flag);
+enum display_mode { MODE_DEFAULT, MODE_LONG, MODE_HORIZONTAL };
+
+void do_ls(const char *dir, int mode);
 void do_ls_long(const char *dir, DIR *dp);
-void do_ls_columns(DIR *dp);
+char **read_names(DIR *dp, size_t *count, size_t *maxlen);
+size_t get_term_width(void);
+void print_vertical(char **names, size_t count, size_t maxlen);
+void print_horizontal(char **names, size_t count, size_t maxlen);
 void mode_to_string(mode_t mode, char *str);
 int num_width(unsigned long long n);
 
 int main(int argc, char *argv[])
 {
     int opt;
-    int long_flag = 0;
+    int mode = MODE_DEFAULT;
 
-    while ((opt = getopt(argc, argv, "l")) != -1)
+    while ((opt = getopt(argc, argv, "lx")) != -1)
     {
         switch (opt)
         {
         case 'l':
-            long_flag = 1;
+            mode = MODE_LONG;
+            break;
+        case 'x':
+            mode = MODE_HORIZONTAL;
             break;
         default:
-            fprintf(stderr, "Usage: %s [-l] [directory...]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-l | -x] [directory...]\n", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
 
     if (optind == argc)
     {
-        do_ls(".", long_flag);
+        do_ls(".", mode);
     }
     else
     {
         for (int i = optind; i < argc; i++)
         {
             printf("Directory listing of %s : \n", argv[i]);
-            do_ls(argv[i], long_flag);
+            do_ls(argv[i], mode);
             puts("");
         }
     }
     return 0;
 }
 
-void do_ls(const char *dir, int long_flag)
+void do_ls(const char *dir, int mode)
 {
     DIR *dp = opendir(dir);
     if (dp == NULL)
@@ -71,13 +79,23 @@ void do_ls(const char *dir, int long_flag)
         return;
     }
 
-    if (long_flag)
+    if (mode == MODE_LONG)
     {
         do_ls_long(dir, dp);
     }
     else
     {
-        do_ls_columns(dp);
+        size_t count = 0, maxlen = 0;
+        char **names = read_names(dp, &count, &maxlen);
+
+        if (mode == MODE_HORIZONTAL)
+            print_horizontal(names, count, maxlen);
+        else
+            print_vertical(names, count, maxlen);
+
+        for (size_t i = 0; i < count; i++)
+            free(names[i]);
+        free(names);
     }
 
     closedir(dp);
@@ -249,21 +267,23 @@ void do_ls_long(const char *dir, DIR *dp)
     }
 }
 
-/* Default display: "down then across" columns that fit the terminal width */
-void do_ls_columns(DIR *dp)
+/* Read all visible filenames into a dynamic array and track the longest name */
+char **read_names(DIR *dp, size_t *count, size_t *maxlen)
 {
     struct dirent *entry;
     char **names = NULL;
-    size_t count = 0, capacity = 0, maxlen = 0;
+    size_t capacity = 0;
 
-    /* Read all filenames into a dynamic array and track the longest */
+    *count = 0;
+    *maxlen = 0;
+
     errno = 0;
     while ((entry = readdir(dp)) != NULL)
     {
         if (entry->d_name[0] == '.')
             continue;
 
-        if (count == capacity)
+        if (*count == capacity)
         {
             capacity = capacity ? capacity * 2 : 64;
             char **tmp = realloc(names, capacity * sizeof(char *));
@@ -275,51 +295,86 @@ void do_ls_columns(DIR *dp)
             names = tmp;
         }
 
-        names[count] = strdup(entry->d_name);
-        if (names[count] == NULL)
+        names[*count] = strdup(entry->d_name);
+        if (names[*count] == NULL)
         {
             perror("strdup");
             break;
         }
-        if (strlen(names[count]) > maxlen)
-            maxlen = strlen(names[count]);
-        count++;
+        if (strlen(names[*count]) > *maxlen)
+            *maxlen = strlen(names[*count]);
+        (*count)++;
     }
     if (errno != 0)
         perror("readdir failed");
 
-    if (count > 0)
+    return names;
+}
+
+/* Terminal width from ioctl, fall back to 80 columns */
+size_t get_term_width(void)
+{
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+        return ws.ws_col;
+    return 80;
+}
+
+/* Default display: "down then across" columns that fit the terminal width */
+void print_vertical(char **names, size_t count, size_t maxlen)
+{
+    if (count == 0)
+        return;
+
+    size_t col_width = maxlen + 2;
+    size_t cols = get_term_width() / col_width;
+    if (cols < 1)
+        cols = 1;
+    size_t rows = (count + cols - 1) / cols;
+
+    /* Print row by row, item index = row + col * rows */
+    for (size_t r = 0; r < rows; r++)
     {
-        /* Terminal width from ioctl, fall back to 80 columns */
-        struct winsize ws;
-        size_t term_width = 80;
-        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
-            term_width = ws.ws_col;
-
-        size_t col_width = maxlen + 2;
-        size_t cols = term_width / col_width;
-        if (cols < 1)
-            cols = 1;
-        size_t rows = (count + cols - 1) / cols;
-
-        /* Print row by row, item index = row + col * rows */
-        for (size_t r = 0; r < rows; r++)
+        for (size_t c = 0; c < cols; c++)
         {
-            for (size_t c = 0; c < cols; c++)
-            {
-                size_t idx = r + c * rows;
-                if (idx >= count)
-                    break;
-                if (idx + rows < count && c + 1 < cols)
-                    printf("%-*s", (int)col_width, names[idx]);
-                else
-                    printf("%s", names[idx]);
-            }
-            printf("\n");
+            size_t idx = r + c * rows;
+            if (idx >= count)
+                break;
+            if (idx + rows < count && c + 1 < cols)
+                printf("%-*s", (int)col_width, names[idx]);
+            else
+                printf("%s", names[idx]);
         }
+        printf("\n");
     }
+}
+
+/* -x display: left to right, wrap to a new line when the next item will not fit */
+void print_horizontal(char **names, size_t count, size_t maxlen)
+{
+    if (count == 0)
+        return;
+
+    size_t col_width = maxlen + 2;
+    size_t term_width = get_term_width();
+    size_t pos = 0; /* horizontal position where the current item starts */
 
     for (size_t i = 0; i < count; i++)
-        free(names[i]);
-    free(names);
+    {
+        printf("%s", names[i]);
+        if (i + 1 == count)
+            break;
+
+        if (pos + 2 * col_width <= term_width)
+        {
+            printf("%*s", (int)(col_width - strlen(names[i])), "");
+            pos += col_width;
+        }
+        else
+        {
+            printf("\n");
+            pos = 0;
+        }
+    }
+    printf("\n");
 }
