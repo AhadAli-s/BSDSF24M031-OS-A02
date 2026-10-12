@@ -56,3 +56,20 @@ The "across" logic needs only the column width and the terminal width. It walks 
 The program keeps one integer variable, `mode`, which holds one value of an enum: `MODE_DEFAULT`, `MODE_LONG` or `MODE_HORIZONTAL`. It starts as `MODE_DEFAULT`. The `getopt()` loop sets it to `MODE_LONG` when it sees `-l` and to `MODE_HORIZONTAL` when it sees `-x`. If both are given, the last option wins.
 
 `mode` is passed into `do_ls()`. If it is `MODE_LONG`, `do_ls()` calls `do_ls_long()`. Otherwise it reads all filenames into an array once with `read_names()`, then calls `print_horizontal()` if the mode is `MODE_HORIZONTAL` and `print_vertical()` in every other case. Reading and printing are separate steps, so a new display mode only needs a new enum value and a new print function.
+## Feature-5: ls-v1.4.0 Alphabetical Sort
+
+### Q1. Why must all directory entries be read into memory before sorting? What are the drawbacks for directories with millions of files?
+
+`readdir()` returns entries one at a time in the order the file system stores them, which is not alphabetical. To know which name comes first, the program has to compare it against every other name, so the first line cannot be printed until the last entry has been read. A sort needs the complete set of data in memory at once.
+
+For a directory with millions of files this has real costs. Memory use grows with the number of entries, since every name needs its own string and a pointer in the array. Nothing is printed until the entire directory has been read and sorted, so the user waits with no output. The sort itself costs O(n log n) comparisons. With `-l` there is also one `lstat()` call per file. A streaming approach with no sorting, like `ls -f`, avoids all of this.
+
+### Q2. What are the purpose and signature of the comparison function required by qsort()? How does it work, and why must it take const void * arguments?
+
+`qsort()` is a generic sorting routine that does not know the type of the elements it sorts. The comparison function tells it how to order two elements. The signature is:
+
+    int compare(const void *a, const void *b);
+
+It must return a negative number if the first element should come before the second, zero if they are equal, and a positive number if the first should come after. `qsort()` calls it repeatedly while it rearranges the array.
+
+The arguments are `const void *` because `qsort()` has to work with any element type, and `void *` is the only pointer type that accepts every kind of pointer. The `const` promises that the function will not modify the elements. Inside the function the pointers are cast back to the real type. The array holds `char *` elements, and `qsort()` passes the address of each element, so the arguments are really `char **`. The function casts them with `*(const char **)a` to get the strings and then returns `strcmp(s1, s2)`. Passing `a` and `b` directly to `strcmp()` would compare the pointer addresses and give wrong results.

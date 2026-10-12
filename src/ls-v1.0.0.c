@@ -25,7 +25,8 @@ extern int errno;
 enum display_mode { MODE_DEFAULT, MODE_LONG, MODE_HORIZONTAL };
 
 void do_ls(const char *dir, int mode);
-void do_ls_long(const char *dir, DIR *dp);
+void do_ls_long(const char *dir, char **names, size_t count);
+int compare_names(const void *a, const void *b);
 char **read_names(DIR *dp, size_t *count, size_t *maxlen);
 size_t get_term_width(void);
 void print_vertical(char **names, size_t count, size_t maxlen);
@@ -79,24 +80,23 @@ void do_ls(const char *dir, int mode)
         return;
     }
 
+    size_t count = 0, maxlen = 0;
+    char **names = read_names(dp, &count, &maxlen);
+
+    /* Sort once, every display mode then prints the sorted array */
+    if (count > 1)
+        qsort(names, count, sizeof(char *), compare_names);
+
     if (mode == MODE_LONG)
-    {
-        do_ls_long(dir, dp);
-    }
+        do_ls_long(dir, names, count);
+    else if (mode == MODE_HORIZONTAL)
+        print_horizontal(names, count, maxlen);
     else
-    {
-        size_t count = 0, maxlen = 0;
-        char **names = read_names(dp, &count, &maxlen);
+        print_vertical(names, count, maxlen);
 
-        if (mode == MODE_HORIZONTAL)
-            print_horizontal(names, count, maxlen);
-        else
-            print_vertical(names, count, maxlen);
-
-        for (size_t i = 0; i < count; i++)
-            free(names[i]);
-        free(names);
-    }
+    for (size_t i = 0; i < count; i++)
+        free(names[i]);
+    free(names);
 
     closedir(dp);
 }
@@ -148,9 +148,8 @@ void mode_to_string(mode_t mode, char *str)
         str[9] = (mode & S_IXOTH) ? 't' : 'T';
 }
 
-void do_ls_long(const char *dir, DIR *dp)
+void do_ls_long(const char *dir, char **names, size_t count)
 {
-    struct dirent *entry;
     struct stat st;
     struct passwd *pw;
     struct group *gr;
@@ -162,12 +161,9 @@ void do_ls_long(const char *dir, DIR *dp)
     long long total = 0;
 
     /* Pass 1: find the widest value in each column and the block total */
-    errno = 0;
-    while ((entry = readdir(dp)) != NULL)
+    for (size_t i = 0; i < count; i++)
     {
-        if (entry->d_name[0] == '.')
-            continue;
-        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
         if (lstat(path, &st) == -1)
         {
             perror(path);
@@ -206,12 +202,9 @@ void do_ls_long(const char *dir, DIR *dp)
     printf("total %lld\n", total / 2);
 
     /* Pass 2: print every entry using the widths found above */
-    rewinddir(dp);
-    while ((entry = readdir(dp)) != NULL)
+    for (size_t i = 0; i < count; i++)
     {
-        if (entry->d_name[0] == '.')
-            continue;
-        snprintf(path, sizeof(path), "%s/%s", dir, entry->d_name);
+        snprintf(path, sizeof(path), "%s/%s", dir, names[i]);
         if (lstat(path, &st) == -1)
             continue;
 
@@ -251,7 +244,7 @@ void do_ls_long(const char *dir, DIR *dp)
                w_group, gname,
                w_size, (long long)st.st_size,
                timebuf,
-               entry->d_name);
+               names[i]);
 
         if (S_ISLNK(st.st_mode))
         {
@@ -265,6 +258,16 @@ void do_ls_long(const char *dir, DIR *dp)
         }
         printf("\n");
     }
+}
+
+/* qsort comparison function.
+ * qsort passes pointers to the array elements, and each element is a char *,
+ * so a and b are really char ** hidden behind const void * */
+int compare_names(const void *a, const void *b)
+{
+    const char *s1 = *(const char **)a;
+    const char *s2 = *(const char **)b;
+    return strcmp(s1, s2);
 }
 
 /* Read all visible filenames into a dynamic array and track the longest name */
