@@ -42,3 +42,17 @@ A single loop over the array prints the names in array order, and a terminal pri
 `ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws)` asks the terminal driver for the current window size. It fills a `struct winsize`, and `ws.ws_col` holds the number of columns. The program uses it to calculate how many columns of filenames fit on one line.
 
 With only a fixed width of 80, the output ignores the real terminal. On a wide terminal it leaves space unused and prints fewer columns than would fit. On a terminal narrower than 80 columns the lines wrap and the alignment breaks. It also does not react when the user resizes the window. The fixed width is only a fallback for the case where `ioctl` fails, such as when the output goes to a pipe or a file.
+
+## Feature-4: ls-v1.3.0 Horizontal Column Display (-x)
+
+### Q1. Compare the implementation complexity of the "down then across" and "across" printing logic. Which needs more pre-calculation and why?
+
+The "down then across" logic needs more pre-calculation. Before printing anything it must know the total number of files, the column width, the number of columns that fit, and the number of rows (`rows = ceil(count / cols)`). Only then can it print, and each item is found with the index formula `r + c * rows`, using nested row and column loops.
+
+The "across" logic needs only the column width and the terminal width. It walks the array once in order, prints each name padded to the column width, and keeps a running horizontal position. When the next item would pass the terminal width it prints a newline and resets the position to zero. It needs no row count and no index arithmetic.
+
+### Q2. What strategy manages the different display modes (-l, -x and default)? How does the program decide which function to call?
+
+The program keeps one integer variable, `mode`, which holds one value of an enum: `MODE_DEFAULT`, `MODE_LONG` or `MODE_HORIZONTAL`. It starts as `MODE_DEFAULT`. The `getopt()` loop sets it to `MODE_LONG` when it sees `-l` and to `MODE_HORIZONTAL` when it sees `-x`. If both are given, the last option wins.
+
+`mode` is passed into `do_ls()`. If it is `MODE_LONG`, `do_ls()` calls `do_ls_long()`. Otherwise it reads all filenames into an array once with `read_names()`, then calls `print_horizontal()` if the mode is `MODE_HORIZONTAL` and `print_vertical()` in every other case. Reading and printing are separate steps, so a new display mode only needs a new enum value and a new print function.
