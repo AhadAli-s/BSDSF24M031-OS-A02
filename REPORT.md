@@ -98,3 +98,17 @@ A bit is set when `st.st_mode & S_IXUSR` is non-zero, and the same pattern appli
     if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
 
 Directories also have these bits set, because the execute bit on a directory means permission to enter it. The type checks therefore run first, so directories get blue and never green.
+
+## Feature-7: ls-v1.6.0 Recursive Listing (-R)
+
+### Q1. What is a "base case" in a recursive function? What is the base case that stops the recursion in the recursive ls?
+
+A base case is the condition under which a recursive function returns without calling itself again. Every recursive function needs one, otherwise it calls itself forever until the stack overflows.
+
+In this `ls`, the base case is a directory that contains no subdirectories. When `do_ls()` loops over the entries of such a directory, no entry passes the `S_ISDIR()` check, so no further recursive call is made and the function returns to its caller. A directory that cannot be opened is a second stopping point, since `opendir()` returns NULL and the function returns immediately. Each call goes one level deeper into a finite directory tree, so the recursion always ends. Skipping the entries `.` and `..` is what prevents an endless loop, because `.` is the directory itself and `..` is its parent. Using `lstat()` instead of `stat()` means symbolic links to directories are not followed, which also prevents loops.
+
+### Q2. Why must a full path be built before the recursive call? What would happen with do_ls("subdir") inside do_ls("parent_dir")?
+
+A relative name like `subdir` is resolved against the current working directory of the process, and that directory does not change while the program runs. The entry `subdir` lives inside `parent_dir`, not in the working directory, so `do_ls("subdir")` would look in the wrong place. In the best case `opendir("subdir")` fails and prints an error, and the listing of that subdirectory is missing. In the worst case a different directory named `subdir` exists in the working directory, and the program lists the wrong contents.
+
+Building the path `parent_dir/subdir` gives a location that is correct from any depth. The same full path is also what `lstat()` needs to check whether the entry is a directory, and it is what gets printed as the `parent_dir/subdir:` header.

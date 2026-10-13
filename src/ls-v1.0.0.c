@@ -32,7 +32,7 @@ extern int errno;
 
 enum display_mode { MODE_DEFAULT, MODE_LONG, MODE_HORIZONTAL };
 
-void do_ls(const char *dir, int mode);
+void do_ls(const char *dir, int mode, int recursive);
 void do_ls_long(const char *dir, char **names, size_t count);
 int compare_names(const void *a, const void *b);
 char **read_names(DIR *dp, size_t *count, size_t *maxlen);
@@ -49,8 +49,9 @@ int main(int argc, char *argv[])
 {
     int opt;
     int mode = MODE_DEFAULT;
+    int recursive_flag = 0;
 
-    while ((opt = getopt(argc, argv, "lx")) != -1)
+    while ((opt = getopt(argc, argv, "lxR")) != -1)
     {
         switch (opt)
         {
@@ -60,30 +61,46 @@ int main(int argc, char *argv[])
         case 'x':
             mode = MODE_HORIZONTAL;
             break;
+        case 'R':
+            recursive_flag = 1;
+            break;
         default:
-            fprintf(stderr, "Usage: %s [-l | -x] [directory...]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-l | -x] [-R] [directory...]\n", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
 
     if (optind == argc)
     {
-        do_ls(".", mode);
+        do_ls(".", mode, recursive_flag);
     }
     else
     {
         for (int i = optind; i < argc; i++)
         {
-            printf("Directory listing of %s : \n", argv[i]);
-            do_ls(argv[i], mode);
-            puts("");
+            if (recursive_flag)
+            {
+                if (i > optind)
+                    puts("");
+                do_ls(argv[i], mode, recursive_flag);
+            }
+            else
+            {
+                printf("Directory listing of %s : \n", argv[i]);
+                do_ls(argv[i], mode, recursive_flag);
+                puts("");
+            }
         }
     }
     return 0;
 }
 
-void do_ls(const char *dir, int mode)
+void do_ls(const char *dir, int mode, int recursive)
 {
+    /* Directory header, same as ls -R */
+    if (recursive)
+        printf("%s:\n", dir);
+
     DIR *dp = opendir(dir);
     if (dp == NULL)
     {
@@ -93,6 +110,7 @@ void do_ls(const char *dir, int mode)
 
     size_t count = 0, maxlen = 0;
     char **names = read_names(dp, &count, &maxlen);
+    closedir(dp);
 
     /* Sort once, every display mode then prints the sorted array */
     if (count > 1)
@@ -105,11 +123,35 @@ void do_ls(const char *dir, int mode)
     else
         print_vertical(dir, names, count, maxlen);
 
+    /* Recursion: visit every subdirectory using its full path */
+    if (recursive)
+    {
+        size_t dlen = strlen(dir);
+        for (size_t i = 0; i < count; i++)
+        {
+            char path[PATH_MAX];
+            struct stat st;
+
+            if (strcmp(names[i], ".") == 0 || strcmp(names[i], "..") == 0)
+                continue;
+
+            snprintf(path, sizeof(path), "%s%s%s", dir,
+                     (dlen > 0 && dir[dlen - 1] == '/') ? "" : "/", names[i]);
+
+            if (lstat(path, &st) == -1)
+                continue;
+
+            if (S_ISDIR(st.st_mode))
+            {
+                printf("\n");
+                do_ls(path, mode, recursive);
+            }
+        }
+    }
+
     for (size_t i = 0; i < count; i++)
         free(names[i]);
     free(names);
-
-    closedir(dp);
 }
 
 /* Number of characters needed to print n in decimal */
