@@ -73,3 +73,28 @@ For a directory with millions of files this has real costs. Memory use grows wit
 It must return a negative number if the first element should come before the second, zero if they are equal, and a positive number if the first should come after. `qsort()` calls it repeatedly while it rearranges the array.
 
 The arguments are `const void *` because `qsort()` has to work with any element type, and `void *` is the only pointer type that accepts every kind of pointer. The `const` promises that the function will not modify the elements. Inside the function the pointers are cast back to the real type. The array holds `char *` elements, and `qsort()` passes the address of each element, so the arguments are really `char **`. The function casts them with `*(const char **)a` to get the strings and then returns `strcmp(s1, s2)`. Passing `a` and `b` directly to `strcmp()` would compare the pointer addresses and give wrong results.
+## Feature-6: ls-v1.5.0 Colorized Output Based on File Type
+
+### Q1. How do ANSI escape codes produce color in a Linux terminal? Show the code sequence for green text.
+
+ANSI escape codes are special byte sequences that the terminal interprets as commands instead of printing them. A sequence starts with the ESC character (octal `\033`, decimal 27) followed by `[`, then numeric parameters separated by semicolons, and ends with the letter `m`, which means "set graphics rendition". Parameter `0` resets all attributes, `30` to `37` select a foreground color, and `7` swaps foreground and background (reverse video). The color stays active until a reset is printed.
+
+Green text:
+
+    printf("\033[0;32mhello\033[0m\n");
+
+`\033[0;32m` switches the color to green, `hello` prints in green, and `\033[0m` returns the terminal to its default color. The escape bytes take no space on screen, so any padding must be calculated from the plain name length and not from the length of the colored string.
+
+### Q2. Which bits in st_mode determine whether a file is executable by the owner, group or others?
+
+Three permission bits are checked, each with its own macro:
+
+- `S_IXUSR` (octal 0100) for the owner
+- `S_IXGRP` (octal 0010) for the group
+- `S_IXOTH` (octal 0001) for others
+
+A bit is set when `st.st_mode & S_IXUSR` is non-zero, and the same pattern applies to the other two. My code colors a file green when any of the three bits is set:
+
+    if (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
+
+Directories also have these bits set, because the execute bit on a directory means permission to enter it. The type checks therefore run first, so directories get blue and never green.
